@@ -354,7 +354,7 @@ function createHandlers({ client, store, cfg, qr, logger = console }) {
   }
 
   // เรียกจาก webhook: ห้ามโยน error ออกไป และไม่ประมวลผลซ้ำเมื่อ LINE ส่ง event เดิมมาอีก
-  async function handleEvent(event) {
+ async function handleEvent(event) {
     const id = event.webhookEventId;
     if (id) {
       if (seenEvents.has(id)) return;
@@ -364,7 +364,10 @@ function createHandlers({ client, store, cfg, qr, logger = console }) {
     try {
       await route(ctx);
     } catch (err) {
-      console.error('[event] จัดการ event ไม่สำเร็จ:', JSON.stringify(err?.originalError?.response?.data || err?.message || err, null, 2));
+      // ดึงรายละเอียด Error จาก LINE SDK v3
+      const details = err?.body || err?.originalError?.response?.data || err?.message || err;
+      console.error('[event] จัดการ event ไม่สำเร็จ:', typeof details === 'object' ? JSON.stringify(details, null, 2) : details);
+
       if (!ctx.replied && ctx.isUser && event.replyToken) {
         try {
           await ctx.reply({ type: 'text', text: 'ขออภัยครับ ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้ง หรือติดต่อแอดมินครับ 🙏' });

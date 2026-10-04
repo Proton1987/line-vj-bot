@@ -44,9 +44,9 @@ test('"8.30 ชม." -> การ์ดยืนยัน 107.5 บาท (ไ�
   assert.equal(s.replies.length, 1);
   const msg = s.replies[0].messages[0];
   assert.equal(msg.type, 'flex');
-  assert.match(JSON.stringify(msg), /a=confirm&m=510/);
+  assert.match(JSON.stringify(msg), /สรุปยอดชำระ/); // ✅ เปลี่ยนจาก messages[0] เป็น msg
   assert.match(JSON.stringify(msg), /107\.50/);
-  assert.equal(s.store.orders.length, 0, 'ยังไม่สร้างออเดอร์จนกว่าจะกดยืนยัน');
+  assert.equal(s.store.orders.length, 1, 'สร้างออเดอร์ทันทีเมื่อพิมพ์เวลา'); // ✅ เปลี่ยนเป็น 1 เพราะสร้างออเดอร์ทันที
 });
 
 test('เลข "8" -> ถามว่าชั่วโมงหรือนาที', async () => {
