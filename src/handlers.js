@@ -364,7 +364,7 @@ function createHandlers({ client, store, cfg, qr, logger = console }) {
     try {
       await route(ctx);
     } catch (err) {
-      logger.error('[event] จัดการ event ไม่สำเร็จ:', JSON.stringify(err?.originalError?.response?.data || err?.message || err, null, 2));
+      console.error('[event] จัดการ event ไม่สำเร็จ:', JSON.stringify(err?.originalError?.response?.data || err?.message || err, null, 2));
       if (!ctx.replied && ctx.isUser && event.replyToken) {
         try {
           await ctx.reply({ type: 'text', text: 'ขออภัยครับ ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้ง หรือติดต่อแอดมินครับ 🙏' });
