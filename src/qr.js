@@ -35,19 +35,44 @@ function createQrService(cfg, logger = console) {
   }
 
   function apiUrl(amount) {
-    // 1. ดึงค่าและทำความสะอาด String (ถ้าว่างให้ใช้ค่าเริ่มต้น)
     let base = String(cfg.apiBase || 'https://my-promptpay-api.onrender.com').trim().replace(/\/+$/, '');
-    if (!/^https?:\/\//i.test(base)) {
-      base = 'https://' + base; // บังคับให้ใส่ https:// ถ้าลืมพิมพ์
+    if (!/^https:\/\//i.test(base)) {
+      base = base.replace(/^http:\/\//i, 'https://');
+      if (!/^https:\/\//i.test(base)) base = 'https://' + base;
     }
-    const ppId = encodeURIComponent(String(cfg.promptpayId || '0812345678').trim());
+    const ppId = encodeURIComponent(String(cfg.promptpayId || '').trim());
     const amt = Number(amount);
+    return `\({base}/qr/\){ppId}/${amt}?format=card&lang=th`;
+  }
 
-    // 2. ต่อ URL ออกมาตรง ๆ ตามเอกสาร API
-    const generatedUrl = `\({base}/qr/\){ppId}/${amt}?format=card&lang=th`;
-    console.log('[qr] Generated URL:', generatedUrl); // พิมพ์ดู URL ใน Render Logs เพื่อความแน่ใจ
+  async function prepareImageUrl(amount) {
+    const order = [];
+    if (cfg.qrMode === 'local') order.push('local');
+    else if (cfg.qrMode === 'api') order.push('api', 'local');
+    else order.push('local', 'api');
 
-    return generatedUrl;
+    let lastErr = null;
+    for (const way of order) {
+      try {
+        if (way === 'local') {
+          if (!localAvailable()) throw new Error('local QR ใช้ไม่ได้');
+          let url = localUrl(amount);
+          // บังคับให้ local URL เป็น https:// เสมอ
+          if (url.startsWith('http://')) url = url.replace('http://', 'https://');
+          return { url, via: 'local' };
+        }
+        if (way === 'api') {
+          if (!(await ensureApiAwake())) throw new Error('QR API ไม่ตอบสนอง');
+          const url = apiUrl(amount);
+          console.log('[qr] Final API URL sent to LINE:', url); // พิมพ์ URL จริงลง Render Logs
+          return { url, via: 'api' };
+        }
+      } catch (err) {
+        lastErr = err;
+        logger.warn(`[qr] วิธี \({way} ล้มเหลว:\){err.message}`);
+      }
+    }
+    throw lastErr || new Error('สร้าง QR ไม่ได้');
   }
 
   // ปลุก API เดิม (Render ฟรี) แต่จำกัดเวลารวม เพื่อไม่ให้ reply token หมดอายุ
