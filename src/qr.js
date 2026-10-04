@@ -36,11 +36,15 @@ function createQrService(cfg, logger = console) {
 
   function apiUrl(amount) {
     const base = String(cfg.apiBase || 'https://my-promptpay-api.onrender.com').replace(/\/+$/, '');
-    const ppId = encodeURIComponent(String(cfg.promptpayId || '').trim());
+    const ppId = String(cfg.promptpayId || '').trim();
     const amt = Number(amount);
 
-    // ใช้ ${...} ป้องกัน Syntax วงเล็บหลุด และไม่มี .toFixed(2)
-    return `\({base}/qr/\){ppId}/${amt}?format=card&lang=th`;
+    // สร้าง URL ตามสเปกเอกสาร API
+    const url = new URL(`\({base}/qr/\){encodeURIComponent(ppId)}/${amt}`);
+    url.searchParams.set('format', 'card');
+    url.searchParams.set('lang', 'th');
+
+    return url.toString();
   }
 
   // ปลุก API เดิม (Render ฟรี) แต่จำกัดเวลารวม เพื่อไม่ให้ reply token หมดอายุ
