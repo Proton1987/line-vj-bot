@@ -35,8 +35,9 @@ function createQrService(cfg, logger = console) {
   }
 
   function apiUrl(amount) {
-    return `${cfg.apiBase}/qr/${encodeURIComponent(cfg.promptpayId)}/${Number(amount).toFixed(2)}?format=card&lang=th`;
-  }
+  // ไม่ใช้ .toFixed(2) เพื่อให้ยอดเงินออกมาเป็น 100 หรือ 107.5 แบบเดียวกับโค้ดเดิม
+  return `\({cfg.apiBase}/qr/\){encodeURIComponent(cfg.promptpayId)}/${Number(amount)}?format=card&lang=th`;
+}
 
   // ปลุก API เดิม (Render ฟรี) แต่จำกัดเวลารวม เพื่อไม่ให้ reply token หมดอายุ
   async function ensureApiAwake({ budgetMs = 20000 } = {}) {
