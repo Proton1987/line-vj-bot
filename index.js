@@ -29,7 +29,7 @@ async function ensureApiAwake() {
         return true;
       }
     } catch (err) {
-      console.log(`[Warm-up] API sleeping... Retry \({i + 1}/\){maxRetries}`);
+      console.log('[Warm-up] API sleeping... Retry ' + (i + 1) + '/' + maxRetries);
       await new Promise((resolve) => setTimeout(resolve, 3000));
     }
   }
@@ -108,7 +108,7 @@ function calculatePrice(totalMinutes) {
   return PACKAGE_8HR_PRICE + extraPrice;
 }
 
-// Flex Message ต้อนรับสมาชิกใหม่
+// 1. Flex Message ต้อนรับเมื่อกดเพิ่มเพื่อน (Welcome Message)
 function createWelcomeFlexMessage() {
   return {
     type: 'flex',
@@ -143,7 +143,6 @@ function createWelcomeFlexMessage() {
         layout: 'vertical',
         spacing: 'md',
         contents: [
-          // กล่องแจ้งเตือนผู้ใช้งานใหม่
           {
             type: 'box',
             layout: 'vertical',
@@ -216,39 +215,6 @@ function createWelcomeFlexMessage() {
                 size: 'xs',
                 color: '#333333',
                 wrap: true
-              }
-            ]
-          },
-          {
-            type: 'text',
-            text: '💡 ตัวอย่างคำนวณราคา',
-            weight: 'bold',
-            size: 'sm',
-            color: '#111111',
-            margin: 'md'
-          },
-          {
-            type: 'box',
-            layout: 'vertical',
-            spacing: 'xs',
-            contents: [
-              {
-                type: 'text',
-                text: '• ไลฟ์ 4 ชม. = 60 บาท (15 x 4)',
-                size: 'xs',
-                color: '#555555'
-              },
-              {
-                type: 'text',
-                text: '• ไลฟ์ 8 ชม. = 100 บาท (ราคาเหมา)',
-                size: 'xs',
-                color: '#555555'
-              },
-              {
-                type: 'text',
-                text: '• ไลฟ์ 9 ชม. = 115 บาท (100 + 15)',
-                size: 'xs',
-                color: '#555555'
               }
             ]
           },
@@ -328,7 +294,109 @@ function createWelcomeFlexMessage() {
   };
 }
 
-// Flex Message สรุปยอดชำระเงิน
+// 2. Flex Message แนะนำเฉพาะ "วิธีใช้งาน"
+function createInstructionFlexMessage() {
+  return {
+    type: 'flex',
+    altText: '📌 คู่มือวิธีใช้งานพิมพ์สั่งการคำนวณราคา',
+    contents: {
+      type: 'bubble',
+      size: 'mega',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: '#17A2B8',
+        contents: [
+          {
+            type: 'text',
+            text: '❓ วิธีพิมพ์คำนวณราคา',
+            weight: 'bold',
+            color: '#FFFFFF',
+            size: 'md'
+          }
+        ]
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'md',
+        contents: [
+          {
+            type: 'text',
+            text: 'สามารถพิมพ์จำนวนเวลาที่ไลฟ์เข้ามาในแชทได้ทันทีครับ ตัวอย่างเช่น:',
+            size: 'xs',
+            color: '#333333',
+            wrap: true
+          },
+          {
+            type: 'box',
+            layout: 'vertical',
+            spacing: 'xs',
+            backgroundColor: '#F8F9FA',
+            paddingAll: 'md',
+            cornerRadius: 'md',
+            contents: [
+              { type: 'text', text: '• 8.30ชม (8 ชั่วโมง 30 นาที)', size: 'xs', color: '#1DB446', weight: 'bold' },
+              { type: 'text', text: '• 2:30 (2 ชั่วโมง 30 นาที)', size: 'xs', color: '#555555' },
+              { type: 'text', text: '• 4 ชม (4 ชั่วโมง)', size: 'xs', color: '#555555' },
+              { type: 'text', text: '• 8 ชม 30 นาที', size: 'xs', color: '#555555' },
+              { type: 'text', text: '• 540 นาที (คำนวณเป็นนาที)', size: 'xs', color: '#555555' }
+            ]
+          },
+          {
+            type: 'text',
+            text: '⚡ ระบบจะสรุปยอดและส่ง PromptPay QR Code ให้สแกนชำระอัตโนมัติทันที!',
+            size: 'xs',
+            color: '#06C755',
+            wrap: true,
+            weight: 'bold'
+          }
+        ]
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          {
+            type: 'button',
+            style: 'primary',
+            height: 'sm',
+            action: {
+              type: 'uri',
+              label: '💬 ติดต่อแอดมิน',
+              uri: ADMIN_LINE_URL
+            },
+            color: '#06C755'
+          }
+        ],
+        flex: 0
+      }
+    },
+    quickReply: {
+      items: [
+        {
+          type: 'action',
+          action: {
+            type: 'uri',
+            label: '💬 คุยกับแอดมิน',
+            uri: ADMIN_LINE_URL
+          }
+        },
+        {
+          type: 'action',
+          action: {
+            type: 'message',
+            label: '💰 ดูราคาบริการ',
+            text: 'ราคา'
+          }
+        }
+      ]
+    }
+  };
+}
+
+// 3. Flex Message สรุปยอดชำระเงิน
 function createFlexMessage(timeSummary, totalMinutes, totalPrice, promoNote) {
   return {
     type: 'flex',
@@ -492,10 +560,19 @@ async function handleEvent(event) {
     return Promise.resolve(null);
   }
 
-  const userText = event.message.text;
+  const userText = event.message.text.trim();
 
-  // เมนูขอตารางราคา / วิธีใช้งาน
-  if (userText === 'วิธีใช้งาน' || userText === 'ราคา' || userText === 'อัตราค่าบริการ') {
+  // คำสั่งกด "วิธีใช้งาน"
+  if (userText === 'วิธีใช้งาน') {
+    const instructionFlex = createInstructionFlexMessage();
+    return client.replyMessage({
+      replyToken: event.replyToken,
+      messages: [instructionFlex],
+    });
+  }
+
+  // คำสั่งขอตารางราคา/ข้อความต้อนรับเดิม
+  if (userText === 'ราคา' || userText === 'อัตราค่าบริการ') {
     const welcomeFlex = createWelcomeFlexMessage();
     return client.replyMessage({
       replyToken: event.replyToken,
@@ -518,7 +595,7 @@ async function handleEvent(event) {
                 type: 'action',
                 action: {
                   type: 'message',
-                  label: '💰 ดูราคา / วิธีใช้งาน',
+                  label: '❓ วิธีใช้งาน',
                   text: 'วิธีใช้งาน'
                 }
               },
