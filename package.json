@@ -1,20 +1,19 @@
 {
-  "name": "line-vj-qrcode",
-  "version": "1.0.0",
-  "description": "",
+  "name": "line-promptpay-bot",
+  "version": "2.0.0",
+  "description": "LINE bot คำนวณราคาบริการดันฟีดไลฟ์ + PromptPay QR + ตรวจสลิป",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js",
+    "test": "node --test"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
+  "engines": { "node": ">=18" },
   "dependencies": {
-    "@line/bot-sdk": "^11.3.0",
-    "axios": "^1.20.0",
-    "dotenv": "^18.0.5",
-    "express": "^5.2.1",
+    "@line/bot-sdk": "^9.0.0",
+    "dotenv": "^16.4.5",
+    "axios": "^1.7.0",
+    "express": "^4.19.2",
+    "google-auth-library": "^9.14.0",
     "promptpay-qr": "^0.5.0",
     "qrcode": "^1.5.4"
   }

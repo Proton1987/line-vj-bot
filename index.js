@@ -1,661 +1,88 @@
-require('dotenv').config();
+'use strict';
+
 const express = require('express');
 const line = require('@line/bot-sdk');
-const axios = require('axios');
 
-const config = {
-  channelAccessToken: (process.env.LINE_CHANNEL_ACCESS_TOKEN || '').trim(),
-  channelSecret: (process.env.LINE_CHANNEL_SECRET || '').trim(),
-};
+const { cfg, validateConfig } = require('./src/config');
+const { createStore } = require('./src/store');
+const { createQrService } = require('./src/qr');
+const { createHandlers } = require('./src/handlers');
 
-const client = new line.messagingApi.MessagingApiClient({
-  channelAccessToken: config.channelAccessToken,
-});
+async function main() {
+  const { errors, warnings } = validateConfig(cfg);
+  warnings.forEach((w) => console.warn('[config] ⚠', w));
+  if (errors.length) {
+    errors.forEach((e) => console.error('[config] ✖', e));
+    console.error('แก้ค่า environment ให้ครบแล้วรันใหม่');
+    process.exit(1);
+  }
 
-const app = express();
+  const client = new line.messagingApi.MessagingApiClient({
+    channelAccessToken: cfg.line.channelAccessToken,
+  });
 
-const API_BASE = (process.env.PROMPTPAY_API_BASE || 'https://my-promptpay-api.onrender.com').trim();
-const PROMPTPAY_ID = (process.env.PROMPTPAY_NUMBER || '').trim();
-const ADMIN_LINE_URL = (process.env.ADMIN_LINE_URL || 'https://line.me/ti/p/~YOUR_ADMIN_ID').trim();
+  const store = await createStore(cfg);
+  const qr = createQrService(cfg);
+  const { handleEvent } = createHandlers({ client, store, cfg, qr });
 
-// เช็กและปลุก Render API
-async function ensureApiAwake() {
-  const maxRetries = 10;
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      const res = await axios.get(API_BASE + '/health', { timeout: 10000 });
-      if (res.status === 200) {
-        console.log('[Warm-up] API is Awake and ready!');
-        return true;
-      }
-    } catch (err) {
-      console.log('[Warm-up] API sleeping... Retry ' + (i + 1) + '/' + maxRetries);
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+  console.log(
+    `[boot] QR mode=${cfg.qrMode} (local ${qr.localAvailable() ? 'พร้อม' : 'ไม่พร้อม'}) | ต้องอนุมัติลูกค้า=${cfg.requireApproval} | แอดมิน ${cfg.adminUserIds.length} คน`
+  );
+
+  const app = express();
+
+  app.get('/', (req, res) => res.send('LINE Bot Server is running!'));
+
+  // cron-job.org ยิงมาที่นี่ทุก 5 นาที  (ใส่ ?deep=1 เพื่อปลุก QR API เดิมด้วย)
+  // ตอบเร็วและตัวเล็ก เพราะ cron-job.org จำกัด 30 วินาที / 64 KB
+  app.get('/health', (req, res) => {
+    if (req.query.deep) qr.pingApiInBackground();
+    res.json({ ok: true, uptime: Math.round(process.uptime()) });
+  });
+
+  qr.registerRoutes(app);
+
+  // ตอบ 200 ให้ LINE ทันที แล้วค่อยประมวลผล: กัน timeout / การส่งซ้ำ / event เดียวพังทั้งชุด
+  app.post('/webhook', line.middleware({
+    channelAccessToken: cfg.line.channelAccessToken,
+    channelSecret: cfg.line.channelSecret,
+  }), (req, res) => {
+    res.sendStatus(200);
+    const events = Array.isArray(req.body?.events) ? req.body.events : [];
+    Promise.allSettled(events.map(handleEvent)).then((results) => {
+      results.forEach((r) => {
+        if (r.status === 'rejected') console.error('[webhook] event ผิดพลาด:', r.reason);
+      });
+    });
+  });
+
+  // จัดการ error ของ middleware (เช่น signature ไม่ถูกต้อง)
+  app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
+    if (line.SignatureValidationFailed && err instanceof line.SignatureValidationFailed) {
+      return res.status(401).send('Invalid signature');
     }
-  }
-  return false;
-}
-
-// ฟังก์ชันแปลงเวลา
-function parseTimeToMinutes(text) {
-  if (!text) return null;
-  const cleanText = text.trim();
-
-  // 1. รูปแบบ hh:mm เช่น "2:30"
-  const hhmmMatch = cleanText.match(/^(\d+):(\d+)$/);
-  if (hhmmMatch) {
-    return parseInt(hhmmMatch[1], 10) * 60 + parseInt(hhmmMatch[2], 10);
-  }
-
-  // 2. รูปแบบทศนิยมระบุหน่วยชม. เช่น "8.30ชม", "2.5ชม"
-  const dotHrMatch = cleanText.match(/^(\d+)\.(\d+)\s*(?:ชม|ชั่วโมง)$/);
-  if (dotHrMatch) {
-    const hours = parseInt(dotHrMatch[1], 10);
-    const minPart = dotHrMatch[2];
-    if (minPart.length === 1) {
-      const parsedMin = Math.round(parseFloat('0.' + minPart) * 60);
-      return hours * 60 + parsedMin;
+    if (line.JSONParseError && err instanceof line.JSONParseError) {
+      return res.status(400).send('Bad request');
     }
-    return hours * 60 + parseInt(minPart, 10);
-  }
+    console.error('[express] error:', err);
+    return res.status(500).end();
+  });
 
-  // 3. รูปแบบปกติ "X ชม Y นาที"
-  let hours = 0;
-  let minutes = 0;
+  const server = app.listen(cfg.port, () => console.log(`Server running on port ${cfg.port}`));
 
-  const hrMatch = cleanText.match(/(\d+)\s*(?:ชม|ชั่วโมง)/);
-  const minMatch = cleanText.match(/(\d+)\s*นาที/);
-
-  if (hrMatch) hours = parseInt(hrMatch[1], 10);
-  if (minMatch) minutes = parseInt(minMatch[1], 10);
-
-  if (hrMatch || minMatch) {
-    return hours * 60 + minutes;
-  }
-
-  // 4. รูปแบบตัวเลขทศนิยมล้วน เช่น "8.30"
-  const decimalMatch = cleanText.match(/^(\d+)\.(\d+)$/);
-  if (decimalMatch) {
-    const hours = parseInt(decimalMatch[1], 10);
-    const minPart = decimalMatch[2];
-    if (minPart.length === 1) {
-      return hours * 60 + Math.round(parseFloat('0.' + minPart) * 60);
-    }
-    return hours * 60 + parseInt(minPart, 10);
-  }
-
-  // 5. ตัวเลขจำนวนเต็มล้วน
-  if (/^\d+$/.test(cleanText)) {
-    return parseInt(cleanText, 10);
-  }
-
-  return null;
-}
-
-// สูตรคำนวณราคา
-function calculatePrice(totalMinutes) {
-  const MINUTE_RATE = 15 / 60;
-  const PACKAGE_8HR_PRICE = 100;
-
-  if (totalMinutes < 480) {
-    const normalPrice = totalMinutes * MINUTE_RATE;
-    return Math.min(normalPrice, PACKAGE_8HR_PRICE);
-  }
-
-  const extraMinutes = totalMinutes - 480;
-  const extraPrice = extraMinutes * MINUTE_RATE;
-
-  return PACKAGE_8HR_PRICE + extraPrice;
-}
-
-// 1. Flex Message ต้อนรับเมื่อกดเพิ่มเพื่อน (Welcome Message)
-function createWelcomeFlexMessage() {
-  return {
-    type: 'flex',
-    altText: 'ยินดีต้อนรับ! อัตราค่าบริการรับดันฟีดห้องไลฟ์สด 📌',
-    contents: {
-      type: 'bubble',
-      size: 'mega',
-      header: {
-        type: 'box',
-        layout: 'vertical',
-        backgroundColor: '#06C755',
-        contents: [
-          {
-            type: 'text',
-            text: 'ยินดีต้อนรับครับ! 👋',
-            weight: 'bold',
-            color: '#FFFFFF',
-            size: 'sm'
-          },
-          {
-            type: 'text',
-            text: 'บริการรับดันฟีดห้องไลฟ์สด 📌',
-            weight: 'bold',
-            color: '#FFFFFF',
-            size: 'lg',
-            margin: 'xs'
-          }
-        ]
-      },
-      body: {
-        type: 'box',
-        layout: 'vertical',
-        spacing: 'md',
-        contents: [
-          {
-            type: 'box',
-            layout: 'vertical',
-            backgroundColor: '#FFF3E0',
-            paddingAll: 'md',
-            cornerRadius: 'md',
-            borderColor: '#FF9800',
-            borderWidth: '1px',
-            contents: [
-              {
-                type: 'text',
-                text: '📌 สำหรับผู้ใช้งานใหม่ (ยังไม่เคยใช้บริการ):',
-                weight: 'bold',
-                size: 'xs',
-                color: '#E65100',
-                wrap: true
-              },
-              {
-                type: 'text',
-                text: 'กรุณาทักหาแอดมินก่อนเพื่อตั้งค่าระบบ โดยแจ้งรายละเอียดดังนี้:\n1. โปรโมชันที่ต้องการ\n2. เลข ID THLive\n3. ชื่อบัญชี THLive',
-                size: 'xxs',
-                color: '#5D4037',
-                wrap: true,
-                margin: 'xs'
-              }
-            ]
-          },
-          {
-            type: 'text',
-            text: '💵 อัตราค่าบริการ',
-            weight: 'bold',
-            size: 'md',
-            color: '#111111',
-            margin: 'md'
-          },
-          {
-            type: 'box',
-            layout: 'vertical',
-            spacing: 'sm',
-            backgroundColor: '#F8F9FA',
-            paddingAll: 'md',
-            cornerRadius: 'md',
-            contents: [
-              {
-                type: 'text',
-                text: '🔹 รายชั่วโมง: ชั่วโมงละ 15 บาท',
-                size: 'xs',
-                color: '#333333',
-                wrap: true
-              },
-              {
-                type: 'text',
-                text: '🔹 เหมาสุดคุ้ม (8 ชม.): เพียง 100 บาท',
-                size: 'xs',
-                color: '#1DB446',
-                weight: 'bold',
-                wrap: true
-              },
-              {
-                type: 'text',
-                text: '(ตก ชม. ละ 12.5 บาท จากปกติ 120.-)',
-                size: 'xxs',
-                color: '#777777',
-                wrap: true,
-                margin: 'none'
-              },
-              {
-                type: 'text',
-                text: '🔹 เกิน 8 ชม.: ชม. ที่ 9 ขึ้นไป +15 บาท/ชม.',
-                size: 'xs',
-                color: '#333333',
-                wrap: true
-              }
-            ]
-          },
-          {
-            type: 'separator',
-            margin: 'md'
-          },
-          {
-            type: 'text',
-            text: '👉 ลูกค้าเดิม สามารถพิมพ์เวลาที่ไลฟ์เข้ามาในแชท (เช่น 8.30ชม หรือ 2:30) ระบบจะสร้าง QR Code ชำระเงินให้ทันทีครับ!',
-            size: 'xs',
-            color: '#06C755',
-            wrap: true,
-            weight: 'bold',
-            margin: 'md'
-          },
-          {
-            type: 'box',
-            layout: 'vertical',
-            backgroundColor: '#FFF8E1',
-            paddingAll: 'sm',
-            cornerRadius: 'sm',
-            margin: 'md',
-            contents: [
-              {
-                type: 'text',
-                text: '⚠️ แอดมินอาจจะตอบช้า แนะนำทักมาอีกรอบช่วง 17:00 น. - 23:00 น. ครับ',
-                size: 'xxs',
-                color: '#D97706',
-                wrap: true,
-                weight: 'bold'
-              }
-            ]
-          }
-        ]
-      },
-      footer: {
-        type: 'box',
-        layout: 'vertical',
-        spacing: 'sm',
-        contents: [
-          {
-            type: 'button',
-            style: 'primary',
-            height: 'sm',
-            action: {
-              type: 'uri',
-              label: '💬 ติดต่อแอดมิน (ตั้งค่า/แจ้งข้อมูล)',
-              uri: ADMIN_LINE_URL
-            },
-            color: '#06C755'
-          }
-        ],
-        flex: 0
-      }
-    },
-    quickReply: {
-      items: [
-        {
-          type: 'action',
-          action: {
-            type: 'uri',
-            label: '💬 คุยกับแอดมิน',
-            uri: ADMIN_LINE_URL
-          }
-        },
-        {
-          type: 'action',
-          action: {
-            type: 'message',
-            label: '❓ วิธีใช้งาน',
-            text: 'วิธีใช้งาน'
-          }
-        }
-      ]
-    }
+  const shutdown = async (signal) => {
+    console.log(`[boot] ได้รับ ${signal} กำลังบันทึกข้อมูลก่อนปิด...`);
+    server.close();
+    try { await store.flush(); } catch (_) { /* ignore */ }
+    process.exit(0);
   };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
-// 2. Flex Message แนะนำเฉพาะ "วิธีใช้งาน"
-function createInstructionFlexMessage() {
-  return {
-    type: 'flex',
-    altText: '📌 คู่มือวิธีใช้งานพิมพ์สั่งการคำนวณราคา',
-    contents: {
-      type: 'bubble',
-      size: 'mega',
-      header: {
-        type: 'box',
-        layout: 'vertical',
-        backgroundColor: '#17A2B8',
-        contents: [
-          {
-            type: 'text',
-            text: '❓ วิธีพิมพ์คำนวณราคา',
-            weight: 'bold',
-            color: '#FFFFFF',
-            size: 'md'
-          }
-        ]
-      },
-      body: {
-        type: 'box',
-        layout: 'vertical',
-        spacing: 'md',
-        contents: [
-          {
-            type: 'text',
-            text: 'สามารถพิมพ์จำนวนเวลาที่ไลฟ์เข้ามาในแชทได้ทันทีครับ ตัวอย่างเช่น:',
-            size: 'xs',
-            color: '#333333',
-            wrap: true
-          },
-          {
-            type: 'box',
-            layout: 'vertical',
-            spacing: 'xs',
-            backgroundColor: '#F8F9FA',
-            paddingAll: 'md',
-            cornerRadius: 'md',
-            contents: [
-              { type: 'text', text: '• 8.30ชม (8 ชั่วโมง 30 นาที)', size: 'xs', color: '#1DB446', weight: 'bold' },
-              { type: 'text', text: '• 2:30 (2 ชั่วโมง 30 นาที)', size: 'xs', color: '#555555' },
-              { type: 'text', text: '• 4 ชม (4 ชั่วโมง)', size: 'xs', color: '#555555' },
-              { type: 'text', text: '• 8 ชม 30 นาที', size: 'xs', color: '#555555' },
-              { type: 'text', text: '• 540 นาที (คำนวณเป็นนาที)', size: 'xs', color: '#555555' }
-            ]
-          },
-          {
-            type: 'text',
-            text: '⚡ ระบบจะสรุปยอดและส่ง PromptPay QR Code ให้สแกนชำระอัตโนมัติทันที!',
-            size: 'xs',
-            color: '#06C755',
-            wrap: true,
-            weight: 'bold'
-          }
-        ]
-      },
-      footer: {
-        type: 'box',
-        layout: 'vertical',
-        spacing: 'sm',
-        contents: [
-          {
-            type: 'button',
-            style: 'primary',
-            height: 'sm',
-            action: {
-              type: 'uri',
-              label: '💬 ติดต่อแอดมิน',
-              uri: ADMIN_LINE_URL
-            },
-            color: '#06C755'
-          }
-        ],
-        flex: 0
-      }
-    },
-    quickReply: {
-      items: [
-        {
-          type: 'action',
-          action: {
-            type: 'uri',
-            label: '💬 คุยกับแอดมิน',
-            uri: ADMIN_LINE_URL
-          }
-        },
-        {
-          type: 'action',
-          action: {
-            type: 'message',
-            label: '💰 ดูราคาบริการ',
-            text: 'ราคา'
-          }
-        }
-      ]
-    }
-  };
-}
+process.on('unhandledRejection', (err) => console.error('[unhandledRejection]', err));
 
-// 3. Flex Message สรุปยอดชำระเงิน
-function createFlexMessage(timeSummary, totalMinutes, totalPrice, promoNote) {
-  return {
-    type: 'flex',
-    altText: 'สรุปยอดชำระบริการรับดันฟีดห้องไลฟ์ ' + totalPrice.toLocaleString('th-TH') + ' บาท',
-    contents: {
-      type: 'bubble',
-      size: 'mega',
-      header: {
-        type: 'box',
-        layout: 'vertical',
-        backgroundColor: '#F8F9FA',
-        contents: [
-          {
-            type: 'text',
-            text: 'สรุปยอดชำระเงิน',
-            weight: 'bold',
-            color: '#1DB446',
-            size: 'sm'
-          },
-          {
-            type: 'text',
-            text: 'บริการรับดันฟีดห้องไลฟ์ 📌',
-            weight: 'bold',
-            size: 'lg',
-            margin: 'xs',
-            color: '#111111'
-          }
-        ]
-      },
-      body: {
-        type: 'box',
-        layout: 'vertical',
-        spacing: 'md',
-        contents: [
-          {
-            type: 'box',
-            layout: 'baseline',
-            spacing: 'sm',
-            contents: [
-              {
-                type: 'text',
-                text: '⏱️ เวลาไลฟ์',
-                color: '#888888',
-                size: 'sm',
-                flex: 3
-              },
-              {
-                type: 'text',
-                text: timeSummary + ' (' + totalMinutes + ' นาที)',
-                wrap: true,
-                color: '#333333',
-                size: 'sm',
-                flex: 5,
-                align: 'end',
-                weight: 'bold'
-              }
-            ]
-          },
-          {
-            type: 'box',
-            layout: 'baseline',
-            spacing: 'sm',
-            contents: [
-              {
-                type: 'text',
-                text: '💰 ยอดชำระ',
-                color: '#888888',
-                size: 'sm',
-                flex: 3
-              },
-              {
-                type: 'text',
-                text: totalPrice.toLocaleString('th-TH') + ' บาท',
-                wrap: true,
-                color: '#1DB446',
-                size: 'xl',
-                flex: 5,
-                align: 'end',
-                weight: 'bold'
-              }
-            ]
-          },
-          promoNote ? {
-            type: 'text',
-            text: promoNote,
-            size: 'xs',
-            color: '#FF5555',
-            align: 'center',
-            margin: 'sm'
-          } : { type: 'spacer', size: 'xs' }
-        ]
-      },
-      footer: {
-        type: 'box',
-        layout: 'vertical',
-        spacing: 'sm',
-        contents: [
-          {
-            type: 'button',
-            style: 'primary',
-            height: 'sm',
-            action: {
-              type: 'uri',
-              label: '💬 ติดต่อแอดมิน / ส่งสลิป',
-              uri: ADMIN_LINE_URL
-            },
-            color: '#06C755'
-          }
-        ],
-        flex: 0
-      }
-    },
-    quickReply: {
-      items: [
-        {
-          type: 'action',
-          action: {
-            type: 'uri',
-            label: '💬 คุยกับแอดมิน',
-            uri: ADMIN_LINE_URL
-          }
-        },
-        {
-          type: 'action',
-          action: {
-            type: 'message',
-            label: '❓ วิธีใช้งาน',
-            text: 'วิธีใช้งาน'
-          }
-        }
-      ]
-    }
-  };
-}
-
-app.get('/', (req, res) => {
-  res.send('LINE Bot Server is running!');
-});
-
-app.post('/webhook', line.middleware(config), (req, res) => {
-  Promise.all(req.body.events.map(handleEvent))
-    .then((result) => res.json(result))
-    .catch((err) => {
-      console.error('Webhook Handling Error:', err);
-      res.status(500).end();
-    });
-});
-
-async function handleEvent(event) {
-  // 1. Event เมื่อเพิ่มเพื่อน (Follow Event)
-  if (event.type === 'follow') {
-    const welcomeFlex = createWelcomeFlexMessage();
-    return client.replyMessage({
-      replyToken: event.replyToken,
-      messages: [welcomeFlex],
-    });
-  }
-
-  // 2. Normal Text Message Event
-  if (event.type !== 'message' || event.message.type !== 'text') {
-    return Promise.resolve(null);
-  }
-
-  const userText = event.message.text.trim();
-
-  // คำสั่งกด "วิธีใช้งาน"
-  if (userText === 'วิธีใช้งาน') {
-    const instructionFlex = createInstructionFlexMessage();
-    return client.replyMessage({
-      replyToken: event.replyToken,
-      messages: [instructionFlex],
-    });
-  }
-
-  // คำสั่งขอตารางราคา/ข้อความต้อนรับเดิม
-  if (userText === 'ราคา' || userText === 'อัตราค่าบริการ') {
-    const welcomeFlex = createWelcomeFlexMessage();
-    return client.replyMessage({
-      replyToken: event.replyToken,
-      messages: [welcomeFlex],
-    });
-  }
-
-  const totalMinutes = parseTimeToMinutes(userText);
-
-  if (totalMinutes === null || totalMinutes <= 0) {
-    return client.replyMessage({
-      replyToken: event.replyToken,
-      messages: [
-        {
-          type: 'text',
-          text: '⚠ รูปแบบเวลาไม่ถูกต้องครับ\nกรุณาพิมพ์ เช่น:\n- 8.30ชม\n- 2:30\n- 4 ชม\n- 8 ชม 30 นาที',
-          quickReply: {
-            items: [
-              {
-                type: 'action',
-                action: {
-                  type: 'message',
-                  label: '❓ วิธีใช้งาน',
-                  text: 'วิธีใช้งาน'
-                }
-              },
-              {
-                type: 'action',
-                action: {
-                  type: 'uri',
-                  label: '💬 ติดต่อแอดมิน',
-                  uri: ADMIN_LINE_URL
-                }
-              }
-            ]
-          }
-        }
-      ]
-    });
-  }
-
-  const rawPrice = calculatePrice(totalMinutes);
-  const totalPrice = Math.round(rawPrice * 100) / 100;
-
-  const hoursDisplay = Math.floor(totalMinutes / 60);
-  const minsDisplay = totalMinutes % 60;
-  let timeSummary = '';
-  if (hoursDisplay > 0) timeSummary += hoursDisplay + ' ชม. ';
-  if (minsDisplay > 0 || hoursDisplay === 0) timeSummary += minsDisplay + ' นาที';
-
-  let promoNote = '';
-  if (totalMinutes >= 480) {
-    promoNote = '🎉 ปรับใช้โปรเหมา 8 ชม. 100 บาท';
-  }
-
-  const encodedId = encodeURIComponent(PROMPTPAY_ID);
-  const qrImageUrl = API_BASE + '/qr/' + encodedId + '/' + totalPrice + '?format=card&lang=th';
-
-  console.log('Generated QR Image URL:', qrImageUrl);
-
-  try {
-    await ensureApiAwake();
-
-    const flexMsg = createFlexMessage(timeSummary, totalMinutes, totalPrice, promoNote);
-
-    return await client.replyMessage({
-      replyToken: event.replyToken,
-      messages: [
-        flexMsg,
-        {
-          type: 'image',
-          originalContentUrl: qrImageUrl,
-          previewImageUrl: qrImageUrl
-        }
-      ]
-    });
-  } catch (error) {
-    console.error('Error replying LINE message:', error?.response?.data || error);
-    return null;
-  }
-}
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+main().catch((err) => {
+  console.error('[boot] เริ่มระบบไม่สำเร็จ:', err?.message || err);
+  process.exit(1);
 });
