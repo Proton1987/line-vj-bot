@@ -1,5 +1,5 @@
 'use strict';
-
+const { createClient } = require('@supabase/supabase-js');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -259,17 +259,95 @@ class SheetsStore extends BaseStore {
   }
 }
 
+/* ---------- Supabase Store ---------- */
+class SupabaseStore extends BaseStore {
+  constructor({ url, key }) {
+    super();
+    if (!url || !key) {
+      throw new Error('SUPABASE_URL หรือ SUPABASE_KEY ไม่ได้ถูกตั้งค่า');
+    }
+    this.supabase = createClient(url, key);
+  }
+
+  async init() {
+    await this._load();
+  }
+
+  async _load() {
+    const { data: cData, error: cErr } = await this.supabase.from('customers').select('*');
+    if (!cErr && cData) {
+      cData.forEach((c) => {
+        this.customers.set(c.user_id, {
+          userId: c.user_id,
+          displayName: c.display_name,
+          status: c.approved ? 'approved' : 'pending',
+          hourlyRate: c.hourly_rate,
+          packageHours: c.package_hours,
+          packagePrice: c.package_price,
+          createdAt: c.created_at,
+        });
+      });
+    }
+
+    const { data: oData, error: oErr } = await this.supabase.from('orders').select('*').order('created_at', { ascending: true });
+    if (!oErr && oData) {
+      this.orders = oData.map((o) => ({
+        orderId: o.id,
+        userId: o.user_id,
+        displayName: o.display_name,
+        minutes: Number(o.hours || 0) * 60,
+        amount: Number(o.amount || 0),
+        status: o.status,
+        slipAt: o.slip_url,
+        createdAt: o.created_at,
+      }));
+    }
+  }
+
+  async _saveCustomer(c) {
+    await this.supabase.from('customers').upsert({
+      user_id: c.userId,
+      display_name: c.displayName,
+      approved: c.status === 'approved',
+      hourly_rate: c.hourlyRate,
+      package_hours: c.packageHours,
+      package_price: c.packagePrice,
+      updated_at: new Date(),
+    });
+  }
+
+  async _appendOrder(o) {
+    await this._saveOrder(o);
+  }
+
+  async _saveOrder(o) {
+    await this.supabase.from('orders').upsert({
+      id: o.orderId,
+      user_id: o.userId,
+      display_name: o.displayName,
+      hours: (o.minutes || 0) / 60,
+      amount: o.amount,
+      status: o.status,
+      updated_at: new Date(),
+    });
+  }
+}
+
+
 async function createStore(cfg) {
   let store;
-  if (cfg.googleSheetId && cfg.googleCredentials) {
+  if (process.env.SUPABASE_URL && process.env.SUPABASE_KEY) {
+    store = new SupabaseStore({ url: process.env.SUPABASE_URL, key: process.env.SUPABASE_KEY });
+    console.log('[store] ใช้ Supabase Database');
+  } else if (cfg.googleSheetId && cfg.googleCredentials) {
     store = new SheetsStore({ sheetId: cfg.googleSheetId, credentials: cfg.googleCredentials });
     console.log('[store] ใช้ Google Sheets');
   } else {
     store = new FileStore(cfg.dataFile);
-    console.warn('[store] ใช้ไฟล์ชั่วคราว (ข้อมูลหายเมื่อ Render รีสตาร์ท) แนะนำให้ต่อ Google Sheets');
+    console.warn('[store] ใช้ไฟล์ชั่วคราว (ข้อมูลหายเมื่อ Render รีสตาร์ท)');
   }
   await store.init();
   return store;
 }
 
-module.exports = { BaseStore, FileStore, SheetsStore, createStore, newOrderId, nowTH, ORDER_COLS, CUSTOMER_COLS };
+module.exports = { BaseStore, FileStore, SheetsStore, SupabaseStore, createStore, newOrderId, nowTH, ORDER_COLS, CUSTOMER_COLS };
