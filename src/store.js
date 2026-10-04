@@ -275,6 +275,7 @@ class SupabaseStore extends BaseStore {
 
   async _load() {
     const { data: cData, error: cErr } = await this.supabase.from('customers').select('*');
+    if (cErr) console.error('[supabase] โหลด customers ไม่สำเร็จ:', JSON.stringify(cErr));
     if (!cErr && cData) {
       cData.forEach((c) => {
         this.customers.set(c.user_id, {
@@ -290,6 +291,7 @@ class SupabaseStore extends BaseStore {
     }
 
     const { data: oData, error: oErr } = await this.supabase.from('orders').select('*').order('created_at', { ascending: true });
+    if (oErr) console.error('[supabase] โหลด orders ไม่สำเร็จ:', JSON.stringify(oErr));
     if (!oErr && oData) {
       this.orders = oData.map((o) => ({
         orderId: o.id,
@@ -305,7 +307,7 @@ class SupabaseStore extends BaseStore {
   }
 
   async _saveCustomer(c) {
-    await this.supabase.from('customers').upsert({
+    const { error } = await this.supabase.from('customers').upsert({
       user_id: c.userId,
       display_name: c.displayName,
       approved: c.status === 'approved',
@@ -314,6 +316,7 @@ class SupabaseStore extends BaseStore {
       package_price: c.packagePrice,
       updated_at: new Date(),
     });
+    if (error) console.error('[supabase] บันทึก customers ไม่สำเร็จ:', JSON.stringify(error));
   }
 
   async _appendOrder(o) {
@@ -321,7 +324,7 @@ class SupabaseStore extends BaseStore {
   }
 
   async _saveOrder(o) {
-    await this.supabase.from('orders').upsert({
+    const { error } = await this.supabase.from('orders').upsert({
       id: o.orderId,
       user_id: o.userId,
       display_name: o.displayName,
@@ -330,6 +333,7 @@ class SupabaseStore extends BaseStore {
       status: o.status,
       updated_at: new Date(),
     });
+    if (error) console.error('[supabase] บันทึก orders ไม่สำเร็จ:', JSON.stringify(error));
   }
 }
 

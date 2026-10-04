@@ -45,36 +45,6 @@ function createQrService(cfg, logger = console) {
     return `${base}/qr/${ppId}/${amt}?format=card&lang=th`;
   }
 
-  async function prepareImageUrl(amount) {
-    const order = [];
-    if (cfg.qrMode === 'local') order.push('local');
-    else if (cfg.qrMode === 'api') order.push('api', 'local');
-    else order.push('local', 'api');
-
-    let lastErr = null;
-    for (const way of order) {
-      try {
-        if (way === 'local') {
-          if (!localAvailable()) throw new Error('local QR ใช้ไม่ได้');
-          let url = localUrl(amount);
-          // บังคับให้ local URL เป็น https:// เสมอ
-          if (url.startsWith('http://')) url = url.replace('http://', 'https://');
-          return { url, via: 'local' };
-        }
-        if (way === 'api') {
-          if (!(await ensureApiAwake())) throw new Error('QR API ไม่ตอบสนอง');
-          const url = apiUrl(amount);
-          console.log('[qr] Final API URL sent to LINE:', url); // พิมพ์ URL จริงลง Render Logs
-          return { url, via: 'api' };
-        }
-      } catch (err) {
-        lastErr = err;
-        logger.warn(`[qr] วิธี \({way} ล้มเหลว:\){err.message}`);
-      }
-    }
-    throw lastErr || new Error('สร้าง QR ไม่ได้');
-  }
-
   // ปลุก API เดิม (Render ฟรี) แต่จำกัดเวลารวม เพื่อไม่ให้ reply token หมดอายุ
   async function ensureApiAwake({ budgetMs = 20000 } = {}) {
     const start = Date.now();
