@@ -35,8 +35,12 @@ function createQrService(cfg, logger = console) {
   }
 
   function apiUrl(amount) {
-    // ตัด .toFixed(2) ออก เพื่อให้ส่งยอดตรงกับ API เดิม (เช่น 100 หรือ 107.5)
-    return `\({cfg.apiBase}/qr/\){encodeURIComponent(cfg.promptpayId)}/${Number(amount)}?format=card&lang=th`;
+    const base = String(cfg.apiBase || 'https://my-promptpay-api.onrender.com').replace(/\/+$/, '');
+    const ppId = encodeURIComponent(String(cfg.promptpayId || '').trim());
+    const amt = Number(amount);
+
+    // ใช้ ${...} ป้องกัน Syntax วงเล็บหลุด และไม่มี .toFixed(2)
+    return `\({base}/qr/\){ppId}/${amt}?format=card&lang=th`;
   }
 
   // ปลุก API เดิม (Render ฟรี) แต่จำกัดเวลารวม เพื่อไม่ให้ reply token หมดอายุ
