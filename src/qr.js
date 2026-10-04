@@ -42,7 +42,7 @@ function createQrService(cfg, logger = console) {
     }
     const ppId = encodeURIComponent(String(cfg.promptpayId || '').trim());
     const amt = Number(amount);
-    return `\({base}/qr/\){ppId}/${amt}?format=card&lang=th`;
+    return `${base}/qr/${ppId}/${amt}?format=card&lang=th`;
   }
 
   async function prepareImageUrl(amount) {
