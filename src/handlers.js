@@ -308,7 +308,7 @@ function createHandlers({ client, store, cfg, qr, logger = console }) {
       case 'invalid':
         return ctx.reply(flex.invalidTime(cfg.adminUrl));
       default:
-        return presentConfirm(ctx, parsed.minutes);
+        return confirmOrder(ctx, parsed.minutes);
     }
   }
 
