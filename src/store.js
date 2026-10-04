@@ -4,17 +4,6 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const ORDER_COLS = [
-  'orderId', 'createdAt', 'userId', 'displayName', 'thliveId',
-  'minutes', 'amount', 'status', 'slipAt', 'paidAt', 'note',
-];
-const CUSTOMER_COLS = [
-  'userId', 'displayName', 'thliveId', 'status',
-  'hourlyRate', 'packageHours', 'packagePrice', 'createdAt', 'note',
-];
-const ORDER_NUMERIC = ['minutes', 'amount'];
-const CUSTOMER_NUMERIC = ['hourlyRate', 'packageHours', 'packagePrice'];
-
 function nowTH() {
   return new Intl.DateTimeFormat('sv-SE', {
     timeZone: 'Asia/Bangkok',
@@ -28,18 +17,6 @@ function newOrderId() {
   const d = nowTH().slice(2, 10).replace(/-/g, ''); // YYMMDD
   return `ORD-${d}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 }
-
-const colLetter = (n) => String.fromCharCode(64 + n); // 1 -> A (ใช้ได้ถึง Z)
-
-function rowToObj(cols, row, numericCols) {
-  const obj = {};
-  cols.forEach((c, i) => {
-    const v = row[i] === undefined || row[i] === null ? '' : row[i];
-    obj[c] = numericCols.includes(c) && v !== '' && Number.isFinite(Number(v)) ? Number(v) : v;
-  });
-  return obj;
-}
-const objToRow = (cols, obj) => cols.map((c) => (obj[c] === undefined || obj[c] === null ? '' : obj[c]));
 
 /* ---------- ฐาน: เก็บในหน่วยความจำ แล้วให้ลูกคลาสบันทึกลงที่เก็บจริง ---------- */
 class BaseStore {
@@ -145,121 +122,21 @@ class FileStore extends BaseStore {
   async flush() { this._write(); }
 }
 
-/* ---------- Google Sheets (ถาวร แอดมินเปิดดู/แก้ไขได้) ---------- */
-class SheetsStore extends BaseStore {
-  constructor({ sheetId, credentials, refreshMs = 120000 }) {
-    super();
-    const { JWT } = require('google-auth-library'); // โหลดเมื่อใช้งานจริงเท่านั้น
-    this.sheetId = sheetId;
-    this.auth = new JWT({
-      email: credentials.client_email,
-      key: credentials.private_key,
-      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-    });
-    this.refreshMs = refreshMs;
-    this._queue = Promise.resolve();
-  }
-
-  async _req(method, urlPath, { params, data } = {}) {
-    const res = await this.auth.request({
-      url: `https://sheets.googleapis.com/v4/spreadsheets/${this.sheetId}${urlPath}`,
-      method,
-      params,
-      data,
-    });
-    return res.data;
-  }
-
-  // ทำงานทีละคิว กันเขียนชนกัน และไม่ให้ error ทำให้ระบบล่ม
-  _enqueue(label, fn, dump) {
-    this._queue = this._queue.then(fn).catch((err) => {
-      const detail = err?.response?.data?.error?.message || err.message;
-      console.error(`[store] ${label} ไม่สำเร็จ: ${detail}`);
-      if (dump) console.error('[store] ข้อมูลที่ยังไม่ได้บันทึก:', JSON.stringify(dump));
-    });
-    return this._queue;
-  }
-
-  async init() {
-    const meta = await this._req('GET', '', { params: { fields: 'sheets.properties.title' } });
-    const titles = (meta.sheets || []).map((s) => s.properties.title);
-    const missing = ['Orders', 'Customers'].filter((t) => !titles.includes(t));
-    if (missing.length) {
-      await this._req('POST', ':batchUpdate', {
-        data: { requests: missing.map((title) => ({ addSheet: { properties: { title } } })) },
-      });
-    }
-    await this._ensureHeader('Orders', ORDER_COLS);
-    await this._ensureHeader('Customers', CUSTOMER_COLS);
-    await this._load();
-    const t = setInterval(() => this._enqueue('รีเฟรชข้อมูล', () => this._load()), this.refreshMs);
-    t.unref();
-  }
-
-  async _ensureHeader(tab, cols) {
-    const range = `${tab}!A1:${colLetter(cols.length)}1`;
-    const res = await this._req('GET', `/values/${encodeURIComponent(range)}`);
-    if (!res.values || !res.values[0] || res.values[0].length === 0) {
-      await this._req('PUT', `/values/${encodeURIComponent(range)}`, {
-        params: { valueInputOption: 'RAW' },
-        data: { values: [cols] },
-      });
-    }
-  }
-
-  async _load() {
-    const oRange = `Orders!A2:${colLetter(ORDER_COLS.length)}`;
-    const cRange = `Customers!A2:${colLetter(CUSTOMER_COLS.length)}`;
-    const [o, c] = await Promise.all([
-      this._req('GET', `/values/${encodeURIComponent(oRange)}`),
-      this._req('GET', `/values/${encodeURIComponent(cRange)}`),
-    ]);
-    const orders = [];
-    (o.values || []).forEach((row, i) => {
-      const obj = rowToObj(ORDER_COLS, row, ORDER_NUMERIC);
-      if (obj.orderId) orders.push({ ...obj, _row: i + 2 });
-    });
-    const customers = new Map();
-    (c.values || []).forEach((row, i) => {
-      const obj = rowToObj(CUSTOMER_COLS, row, CUSTOMER_NUMERIC);
-      if (obj.userId) customers.set(obj.userId, { ...obj, _row: i + 2 });
-    });
-    this.orders = orders;
-    this.customers = customers;
-  }
-
-  async _append(tab, cols, obj) {
-    const res = await this._req('POST', `/values/${encodeURIComponent(`${tab}!A:${colLetter(cols.length)}`)}:append`, {
-      params: { valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS' },
-      data: { values: [objToRow(cols, obj)] },
-    });
-    const m = /!A(\d+):/.exec(res?.updates?.updatedRange || '');
-    if (m) obj._row = Number(m[1]);
-  }
-
-  async _update(tab, cols, obj) {
-    const range = `${tab}!A${obj._row}:${colLetter(cols.length)}${obj._row}`;
-    await this._req('PUT', `/values/${encodeURIComponent(range)}`, {
-      params: { valueInputOption: 'RAW' },
-      data: { values: [objToRow(cols, obj)] },
-    });
-  }
-
-  _saveCustomer(c) {
-    this._enqueue('บันทึกลูกค้า', () => (c._row ? this._update('Customers', CUSTOMER_COLS, c) : this._append('Customers', CUSTOMER_COLS, c)), c);
-  }
-  _appendOrder(o) {
-    this._enqueue('บันทึกออเดอร์', () => this._append('Orders', ORDER_COLS, o), o);
-  }
-  _saveOrder(o) {
-    this._enqueue('อัปเดตออเดอร์', () => (o._row ? this._update('Orders', ORDER_COLS, o) : this._append('Orders', ORDER_COLS, o)), o);
-  }
-  async flush() {
-    await this._queue;
-  }
-}
-
 /* ---------- Supabase Store ---------- */
+// nowTH() คืนเวลาไทยแบบไม่มี timezone ("2026-10-05 14:00:00") ต้องใส่ +07:00 ก่อนเก็บลง timestamptz
+const toTs = (v) => (v ? String(v).replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(String(v)) ? '' : '+07:00') : null);
+const fromTs = (v) => {
+  if (!v) return '';
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return v;
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Asia/Bangkok',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  }).format(d);
+};
+
 class SupabaseStore extends BaseStore {
   constructor({ url, key }) {
     super();
@@ -281,7 +158,9 @@ class SupabaseStore extends BaseStore {
         this.customers.set(c.user_id, {
           userId: c.user_id,
           displayName: c.display_name,
-          status: c.approved ? 'approved' : 'pending',
+          thliveId: c.thlive_id || '',
+          note: c.note || '',
+          status: c.status || (c.approved ? 'approved' : 'pending'),
           hourlyRate: c.hourly_rate,
           packageHours: c.package_hours,
           packagePrice: c.package_price,
@@ -297,10 +176,13 @@ class SupabaseStore extends BaseStore {
         orderId: o.id,
         userId: o.user_id,
         displayName: o.display_name,
+        thliveId: o.thlive_id || '',
         minutes: Number(o.hours || 0) * 60,
         amount: Number(o.amount || 0),
         status: o.status,
-        slipAt: o.slip_url,
+        slipAt: fromTs(o.slip_at),
+        paidAt: fromTs(o.paid_at),
+        note: o.note || '',
         createdAt: o.created_at,
       }));
     }
@@ -310,6 +192,9 @@ class SupabaseStore extends BaseStore {
     const { error } = await this.supabase.from('customers').upsert({
       user_id: c.userId,
       display_name: c.displayName,
+      thlive_id: c.thliveId || null,
+      note: c.note || null,
+      status: c.status || 'pending',
       approved: c.status === 'approved',
       hourly_rate: c.hourlyRate,
       package_hours: c.packageHours,
@@ -328,9 +213,13 @@ class SupabaseStore extends BaseStore {
       id: o.orderId,
       user_id: o.userId,
       display_name: o.displayName,
+      thlive_id: o.thliveId || null,
       hours: (o.minutes || 0) / 60,
       amount: o.amount,
       status: o.status,
+      slip_at: toTs(o.slipAt),
+      paid_at: toTs(o.paidAt),
+      note: o.note || null,
       updated_at: new Date(),
     });
     if (error) console.error('[supabase] บันทึก orders ไม่สำเร็จ:', JSON.stringify(error));
@@ -343,9 +232,6 @@ async function createStore(cfg) {
   if (process.env.SUPABASE_URL && process.env.SUPABASE_KEY) {
     store = new SupabaseStore({ url: process.env.SUPABASE_URL, key: process.env.SUPABASE_KEY });
     console.log('[store] ใช้ Supabase Database');
-  } else if (cfg.googleSheetId && cfg.googleCredentials) {
-    store = new SheetsStore({ sheetId: cfg.googleSheetId, credentials: cfg.googleCredentials });
-    console.log('[store] ใช้ Google Sheets');
   } else {
     store = new FileStore(cfg.dataFile);
     console.warn('[store] ใช้ไฟล์ชั่วคราว (ข้อมูลหายเมื่อ Render รีสตาร์ท)');
@@ -354,4 +240,4 @@ async function createStore(cfg) {
   return store;
 }
 
-module.exports = { BaseStore, FileStore, SheetsStore, SupabaseStore, createStore, newOrderId, nowTH, ORDER_COLS, CUSTOMER_COLS };
+module.exports = { BaseStore, FileStore, SupabaseStore, createStore, newOrderId, nowTH };
