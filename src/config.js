@@ -59,6 +59,10 @@ const cfg = {
 
   rateLimitPerMin: num('RATE_LIMIT_PER_MIN', 10),
 
+  // SlipOK: ตรวจสลิปอัตโนมัติ (ไม่ตั้ง = แอดมินกดยืนยันเองเหมือนเดิม)
+  slipokBranchId: env('SLIPOK_BRANCH_ID'),
+  slipokApiKey: env('SLIPOK_API_KEY'),
+
   // ที่เก็บข้อมูล
   googleSheetId: env('GOOGLE_SHEET_ID'),
   googleCredentials: parseGoogleCredentials(env('GOOGLE_SERVICE_ACCOUNT_JSON')),
@@ -91,6 +95,9 @@ function validateConfig(c) {
   }
   if (!['auto', 'local', 'api'].includes(c.qrMode)) {
     errors.push('QR_MODE ต้องเป็น auto, local หรือ api');
+  }
+  if (Boolean(c.slipokBranchId) !== Boolean(c.slipokApiKey)) {
+    warnings.push('ตั้ง SLIPOK_BRANCH_ID / SLIPOK_API_KEY ไม่ครบทั้งคู่ ระบบตรวจสลิปอัตโนมัติจะไม่ทำงาน');
   }
   if (c.publicBaseUrl && !c.publicBaseUrl.startsWith('https://')) {
     warnings.push('PUBLIC_BASE_URL ต้องเป็น https:// (LINE รับเฉพาะรูปจาก https)');

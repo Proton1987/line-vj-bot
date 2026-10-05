@@ -4,6 +4,7 @@ const { parseDuration, formatDuration } = require('./parseTime');
 const { resolveRates, calculatePrice } = require('./pricing');
 const { newOrderId, nowTH } = require('./store');
 const flex = require('./flex');
+const slip = require('./slip');
 
 const OPEN_STATUSES = ['pending', 'slip_received', 'rejected'];
 
@@ -183,15 +184,80 @@ function createHandlers({ client, store, cfg, qr, logger = console }) {
     }
   }
 
+  // ข้อความอธิบายเหตุที่ SlipOK ปฏิเสธสลิป (แสดงให้แอดมินเท่านั้น)
+  function slipRejectReason(r) {
+    switch (Number(r.code)) {
+      case 1012: return 'สลิปซ้ำ (เคยถูกใช้แล้ว)';
+      case 1013: return 'ยอดในสลิปไม่ตรงกับออเดอร์';
+      case 1014: return 'บัญชีผู้รับไม่ตรงกับที่ผูกไว้ใน SlipOK';
+      default: return `SlipOK: ${r.message || 'ไม่ทราบสาเหตุ'}${r.code ? ` (${r.code})` : ''}`;
+    }
+  }
+
+  // ตรวจสลิปอัตโนมัติ คืน { paid: true } เมื่อยืนยันชำระให้แล้ว
+  // หรือ { paid: false, reason } เมื่อต้องให้แอดมินตรวจเอง (reason ว่าง = ไม่ได้เปิดระบบนี้)
+  async function tryAutoVerify(ctx, order) {
+    if (!slip.isConfigured(cfg)) return { paid: false };
+
+    let result;
+    try {
+      const image = await slip.downloadLineImage(ctx.event.message.id, cfg.line.channelAccessToken);
+      const qrData = await slip.decodeQrFromBuffer(image);
+      if (!qrData) return { paid: false, reason: 'อ่าน QR บนรูปไม่ได้ (อาจไม่ใช่สลิป หรือรูปไม่ชัด)' };
+      result = await slip.verifySlip(qrData, cfg, { amount: order.amount });
+    } catch (err) {
+      logger.error('[slip] ตรวจสลิปไม่สำเร็จ:', err?.message || err);
+      return { paid: false, reason: `ระบบตรวจสลิปขัดข้อง (${err?.message || 'unknown'})` };
+    }
+
+    if (!result.ok) return { paid: false, reason: slipRejectReason(result) };
+
+    const paidAmount = Number(result.data?.amount);
+    if (!Number.isFinite(paidAmount) || Math.abs(paidAmount - Number(order.amount)) > 0.009) {
+      return { paid: false, reason: `ยอดในสลิป ${result.data?.amount ?? '?'} ไม่ตรงกับออเดอร์ ${order.amount}` };
+    }
+
+    // สลิปผ่านแล้ว: ตั้งแต่จุดนี้ห้ามย้อนกลับไปสถานะ slip_received
+    const ref = result.data?.transRef || '';
+    const at = nowTH();
+    const updated = await store.updateOrder(order.orderId, {
+      status: 'paid',
+      slipAt: at,
+      paidAt: at,
+      note: [order.note, `ตรวจสลิปอัตโนมัติ (SlipOK) ref ${ref}`].filter(Boolean).join(' | '),
+    });
+    try {
+      await ctx.reply(flex.paidNotice(updated));
+    } catch (err) {
+      logger.error('[slip] reply แจ้งลูกค้าไม่สำเร็จ ลองส่งด้วย push:', err?.message || err);
+      await push(order.userId, flex.paidNotice(updated));
+    }
+    await notifyAdmins({
+      type: 'text',
+      text: `✅ ตรวจสลิปอัตโนมัติผ่าน\n${order.displayName || order.userId.slice(0, 8)} | ${flex.fmtBaht(order.amount)} บาท\nออเดอร์: ${order.orderId}\nref: ${ref}`,
+    });
+    return { paid: true };
+  }
+
   async function onSlip(ctx) {
     const customer = await ensureCustomer(ctx.userId);
     const order = store.latestOrderForUser(ctx.userId, OPEN_STATUSES);
 
     if (order) {
+      const auto = await tryAutoVerify(ctx, order);
+      if (auto.paid) return;
+
       await store.updateOrder(order.orderId, { status: 'slip_received', slipAt: nowTH() });
       await ctx.reply(flex.slipReceived(order));
       if (!throttled(`slip:${ctx.userId}`, 60 * 1000)) {
-        await notifyAdmins(flex.adminSlip({ order, customer }));
+        const messages = [flex.adminSlip({ order, customer })];
+        if (auto.reason) {
+          messages.unshift({
+            type: 'text',
+            text: `⚠ ตรวจสลิปอัตโนมัติไม่ผ่าน: ${auto.reason}\nออเดอร์: ${order.orderId} (กรุณาตรวจเอง)`,
+          });
+        }
+        await notifyAdmins(messages);
       }
     } else {
       await ctx.reply(flex.slipNoOrder(cfg.adminUrl));
