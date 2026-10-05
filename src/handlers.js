@@ -141,7 +141,9 @@ function createHandlers({ client, store, cfg, qr, logger = console }) {
     const key = `${ctx.userId}:${minutes}`;
     const recent = recentOrders.get(key);
     let order = recent && Date.now() - recent.ts < 2 * 60 * 1000 ? store.getOrder(recent.orderId) : null;
+    let isNewOrder = false;
     if (!order || order.status !== 'pending' || order.amount !== pricing.amount) {
+      isNewOrder = true;
       order = await store.addOrder({
         orderId: newOrderId(),
         userId: ctx.userId,
@@ -169,6 +171,16 @@ function createHandlers({ client, store, cfg, qr, logger = console }) {
     }
 
     await ctx.reply([flex.paymentCard({ order, pricing, adminUrl: cfg.adminUrl }), flex.qrImage(qrUrl)]);
+
+    // แจ้งแอดมินว่ามีลูกค้าสั่งเวลาใหม่ (ส่งหลังตอบลูกค้าแล้ว จะได้ไม่หน่วงการส่ง QR)
+    if (isNewOrder) {
+      const who = customer.displayName || ctx.userId;
+      const th = customer.thliveId ? ` (THLive: ${customer.thliveId})` : '';
+      await notifyAdmins({
+        type: 'text',
+        text: `🕐 ลูกค้าสั่งเวลาใหม่\nลูกค้า: ${who}${th}\nเวลา: ${formatDuration(minutes)} | ยอด: ${flex.fmtBaht(order.amount)} บาท\nออเดอร์: ${order.orderId}`,
+      });
+    }
   }
 
   async function onSlip(ctx) {
