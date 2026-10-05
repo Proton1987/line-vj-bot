@@ -42,7 +42,7 @@ function createQrService(cfg, logger = console) {
     }
     const ppId = encodeURIComponent(String(cfg.promptpayId || '').trim());
     const amt = Number(amount);
-    return `${base}/qr/${ppId}/${amt}?format=card&lang=th`;
+    return `${base}/qr/${ppId}/${amt}.png?format=card&lang=th`;
   }
 
   // ปลุก API เดิม (Render ฟรี) แต่จำกัดเวลารวม เพื่อไม่ให้ reply token หมดอายุ
