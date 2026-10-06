@@ -254,7 +254,7 @@ const qrFailed = (adminUrl) =>
 
 const slipReceived = (order) => ({
   type: 'text',
-  text: `✅ รับสลิปแล้วครับ\nออเดอร์ ${order.orderId}\nยอด ${fmtBaht(order.amount)} บาท\nรอแอดมินตรวจสอบสักครู่ จะมีข้อความแจ้งกลับครับ`,
+  text: `✅ ได้รับสลิปแล้วครับ\nยอด ${fmtBaht(order.amount)} บาท\n\nแอดมินกำลังตรวจสอบ รอสักครู่นะครับ\nตรวจเสร็จแล้วจะแจ้งให้ทราบทันทีครับ`,
 });
 
 const slipNoOrder = (adminUrl) =>
@@ -262,11 +262,11 @@ const slipNoOrder = (adminUrl) =>
 
 const paidNotice = (order) => ({
   type: 'text',
-  text: `✅ ชำระเงินเรียบร้อยครับ\nออเดอร์ ${order.orderId}\nยอด ${fmtBaht(order.amount)} บาท\nขอบคุณที่ใช้บริการครับ 🙏`,
+  text: `✅ ชำระเงินเรียบร้อยแล้วครับ\nยอด ${fmtBaht(order.amount)} บาท\n\nขอบคุณที่ใช้บริการครับ 🙏`,
 });
 
 const rejectedNotice = (order, adminUrl) =>
-  withHelp(`⚠ ตรวจสอบสลิปออเดอร์ ${order.orderId} แล้วยังไม่ถูกต้องครับ\nกรุณาส่งสลิปใหม่ หรือติดต่อแอดมินครับ`, adminUrl);
+  withHelp('⚠ สลิปที่ส่งมายังไม่ถูกต้องครับ\nกรุณาตรวจสอบแล้วส่งสลิปใหม่อีกครั้ง หรือติดต่อแอดมินได้เลยครับ', adminUrl);
 
 const approvedNotice = () => ({
   type: 'text',
