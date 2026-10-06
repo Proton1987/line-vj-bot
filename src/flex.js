@@ -63,8 +63,6 @@ function describePricing(p) {
     }
   } else if (p.kind === 'capped') {
     lines.push(`🎉 ถึงเพดานโปรเหมา จ่ายสูงสุด ${fmtBaht(p.packagePrice)} บาท (ไม่เกิน ${fmtNum(p.packageHours)} ชม.)`);
-  } else {
-    lines.push(`คิดตามจริง ชม. ละ ${fmtBaht(p.hourlyRate)} บาท`);
   }
   if (p.minApplied) lines.push(`ยอดขั้นต่ำ ${fmtBaht(p.minCharge)} บาท`);
   return lines;
