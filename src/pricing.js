@@ -20,8 +20,7 @@ function resolveRates(customer, defaults = DEFAULT_RATES) {
 
 /**
  * kind:
- *  - 'normal'        ต่ำกว่าแพ็กเกจ คิดตามนาที
- *  - 'capped'        คิดตามนาทีแล้วเกินราคาเหมา -> จ่ายแค่ราคาเหมา
+ *  - 'normal'        ต่ำกว่าแพ็กเกจ คิดตามนาทีตามจริง
  *  - 'package_plus'  ครบแพ็กเกจ + ส่วนเกินคิดตามนาที
  */
 function calculatePrice(totalMinutes, rates = DEFAULT_RATES, minCharge = 1) {
@@ -40,14 +39,8 @@ function calculatePrice(totalMinutes, rates = DEFAULT_RATES, minCharge = 1) {
     extraMinutes = totalMinutes - packageMinutes;
     extra = extraMinutes * perMinute;
   } else {
-    const normal = totalMinutes * perMinute;
-    if (normal > packagePrice) {
-      kind = 'capped';
-      base = packagePrice;
-    } else {
-      kind = 'normal';
-      base = normal;
-    }
+    kind = 'normal';
+    base = totalMinutes * perMinute;
   }
 
   const raw = round2(base + extra);
