@@ -18,6 +18,9 @@ function normalize(text) {
     .trim();
 }
 
+// ช่วงเวลานาฬิกา เช่น "21:35-23:03" หรือ "21.35 ถึง 23.03" (ตัวคั่น: - – — ~ ถึง to)
+const RANGE_RE = /(?<![\d.:])(\d{1,2})[:.](\d{2})\s*(?:-|–|—|~|ถึง|to)\s*(\d{1,2})[:.](\d{2})(?![\d.:])/;
+
 // "8.30" -> 8 ชม. 30 นาที | "8.5" -> 8 ชม. 30 นาที | "8.75" -> 8 ชม. 45 นาที
 // ทศนิยม 2 หลักที่ < 60 ตีเป็นนาที (ตามที่คนไทยพิมพ์ 8.30) นอกนั้นตีเป็นเศษของชั่วโมง
 function decimalToMinutes(intStr, fracStr, hasExtraMinutes) {
@@ -33,7 +36,7 @@ function decimalToMinutes(intStr, fracStr, hasExtraMinutes) {
 
 /**
  * คืนค่าเป็น object เสมอ:
- *  { type: 'ok', minutes }
+ *  { type: 'ok', minutes }          รวมช่วงเวลา เช่น "21:35-23:03"
  *  { type: 'ambiguous', number }   เลขล้วน <= 24 (ไม่รู้ว่าชั่วโมงหรือนาที)
  *  { type: 'invalid' }             มีตัวเลขแต่อ่านเป็นเวลาไม่ได้
  *  { type: 'toolarge', maxMinutes }
@@ -45,8 +48,14 @@ function parseDuration(text, { maxMinutes = DEFAULT_MAX_MINUTES } = {}) {
 
   let minutes = null;
 
-  const clock = s.match(/(?<![\d.:])(\d{1,3}):(\d{1,2})(?![\d:])/);
-  if (clock) {
+  const range = s.match(RANGE_RE);
+  const clock = range ? null : s.match(/(?<![\d.:])(\d{1,3}):(\d{1,2})(?![\d:])/);
+  if (range) {
+    const [h1, m1, h2, m2] = range.slice(1, 5).map((n) => parseInt(n, 10));
+    if (h1 > 23 || h2 > 23 || m1 > 59 || m2 > 59) return { type: 'invalid' };
+    // เวลาจบน้อยกว่าเวลาเริ่ม = ข้ามเที่ยงคืน (นับเป็นวันถัดไป) / เท่ากัน = อ่านไม่ได้
+    minutes = (h2 * 60 + m2 - (h1 * 60 + m1) + 1440) % 1440;
+  } else if (clock) {
     const mm = parseInt(clock[2], 10);
     if (mm >= 60) return { type: 'invalid' };
     minutes = parseInt(clock[1], 10) * 60 + mm;
